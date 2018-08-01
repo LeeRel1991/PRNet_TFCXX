@@ -173,15 +173,14 @@ int main(int argc, char **argv)
     {
         std::cout << "\nStart running network... " << std::endl << std::flush;
 
-//        Image<float> pos_img;
-
+        Image<float> pos_img;
         auto startT = std::chrono::system_clock::now();
 
-//        tf_predictor.predict(inp_img, pos_img);
+        tf_predictor.predict(inp_img, pos_img);
 
         auto endT = std::chrono::system_clock::now();
         std::chrono::duration<double, std::milli> ms = endT - startT;
-//        std::cout << "Image  Ran network. elapsed = " << ms.count() << " [ms] " << std::endl;
+        std::cout << "Image  Ran network. elapsed = " << ms.count() << " [ms] " << std::endl;
 //        std::cout << " pos w " << pos_img.getWidth() << " h " << pos_img.getHeight() << "\n";
 
 //        const float kMaxPos = pos_img.getWidth() * 1.1f;

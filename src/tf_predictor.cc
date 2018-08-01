@@ -54,7 +54,7 @@ for(int i = 0;i < kpt.rows; i++){ \
     }\
 }
 
-#define matUnnormalize(img) \
+#define matUnnormalize(img,scale) \
 {\
     int nr = img.rows; \
     int nc = img.cols * img.channels(); \
@@ -63,7 +63,7 @@ for(int i = 0;i < kpt.rows; i++){ \
         float* data = img.ptr<float>(i); \
         for(int j= 0; j< nc; ++j) \
         { \
-            data[j]=  data[j]*255.f; \
+            data[j]=  data[j]*scale; \
         } \
     }\
 }
@@ -160,18 +160,18 @@ int PRNet::Impl::load(const std::string& graph_filename,
 bool PRNet::Impl::predict(const cv::Mat& inp_img, cv::Mat & out_img)
 {
     // Copy from input image
-    Eigen::Index inp_width = static_cast<Eigen::Index>(inp_img.cols);
-    Eigen::Index inp_height = static_cast<Eigen::Index>(inp_img.rows);
-    Eigen::Index inp_channels = static_cast<Eigen::Index>(inp_img.channels());
-    Tensor input_tensor(DT_FLOAT, {1, inp_height, inp_width, inp_channels});
+    Eigen::Index inp_width = static_cast<Eigen::Index>(inp_img.cols),
+            inp_height = static_cast<Eigen::Index>(inp_img.rows),
+            inp_channels = static_cast<Eigen::Index>(inp_img.channels());
 
     // TODO: No copy
+    std::vector<Tensor> output_tensors;
+    Tensor input_tensor(DT_FLOAT, {1, inp_height, inp_width, inp_channels});
     memcpy(input_tensor.flat<float>().data(), inp_img.data, inp_width * inp_height * inp_channels * sizeof(float) );
 
     auto startT = std::chrono::system_clock::now();
 
     // Run
-    std::vector<Tensor> output_tensors;
     Status run_status = session->Run({{input_layer, input_tensor}},
                                  {output_layer}, {}, &output_tensors);
 
@@ -183,28 +183,20 @@ bool PRNet::Impl::predict(const cv::Mat& inp_img, cv::Mat & out_img)
         return false;
     }
 
-    const Tensor& output_tensor = output_tensors[0];
-
     // Copy to output image
+    const Tensor& output_tensor = output_tensors[0];
     TTypes<float, 4>::ConstTensor tensor = output_tensor.tensor<float, 4>();
+
     assert(tensor.dimension(0) == 1);
-    size_t out_height = static_cast<size_t>(tensor.dimension(1));
-    size_t out_width = static_cast<size_t>(tensor.dimension(2));
-    size_t out_channels = static_cast<size_t>(tensor.dimension(3));
+    assert(tensor.dimension(3) == 3);
+    size_t out_height = static_cast<size_t>(tensor.dimension(1)),
+            out_width = static_cast<size_t>(tensor.dimension(2));
 
     //Warn: 默认3通道彩色图，所以没做条件判断
     out_img.create(out_width, out_height, CV_32FC3);
-
-    //TODO: 测试mat访问像素赋值的高效方法
-    for(int i = 0; i < out_height; ++i)
-    {
-        for(int j= 0; j< out_width; ++j)
-        {
-            out_img.at<cv::Vec3f>(i, j)[0] = tensor(0, i, j, 0) * 256 * 1.1;
-            out_img.at<cv::Vec3f>(i, j)[1] = tensor(0, i, j, 1) * 256 * 1.1;
-            out_img.at<cv::Vec3f>(i, j)[2] = tensor(0, i, j, 2) * 256 * 1.1;
-        }
-    }
+    const float* data = tensor.data();
+    memcpy(out_img.data, data, out_height * out_width * 3 * sizeof(float));
+    matUnnormalize(out_img, 256*1.1f);
 
     return true;
 }
@@ -212,9 +204,9 @@ bool PRNet::Impl::predict(const cv::Mat& inp_img, cv::Mat & out_img)
 bool PRNet::Impl::predict(const Image<float>& inp_img, Image<float>& out_img)
 {
     // Copy from input image
-    Eigen::Index inp_width = static_cast<Eigen::Index>(inp_img.getWidth());
-    Eigen::Index inp_height = static_cast<Eigen::Index>(inp_img.getHeight());
-    Eigen::Index inp_channels = static_cast<Eigen::Index>(inp_img.getChannels());
+    Eigen::Index inp_width = static_cast<Eigen::Index>(inp_img.getWidth()),
+            inp_height = static_cast<Eigen::Index>(inp_img.getHeight()),
+            inp_channels = static_cast<Eigen::Index>(inp_img.getChannels());
     Tensor input_tensor(DT_FLOAT, {1, inp_height, inp_width, inp_channels});
     // TODO: No copy
     std::copy_n(inp_img.getData(), inp_width * inp_height * inp_channels,
@@ -244,11 +236,11 @@ bool PRNet::Impl::predict(const Image<float>& inp_img, Image<float>& out_img)
     size_t out_width = static_cast<size_t>(tensor.dimension(2));
     size_t out_channels = static_cast<size_t>(tensor.dimension(3));
     out_img.create(out_width, out_height, out_channels);
+
     out_img.foreach([&](int x, int y, int c, float& v)
     {
         v = tensor(0, y, x, c);
     });
-
 
     return true;
 }
@@ -348,7 +340,6 @@ void PRNet::align(const Mat &img, const std::vector<Rect> &rects, std::vector<Ma
         std::chrono::duration<double, std::milli> ms = endT - startT;
         std::cout << "predict. elapsed = " << ms.count() << " [ms] " << std::endl;
 
-
         // get five key points
         //矫正
         startT = std::chrono::system_clock::now();
@@ -377,14 +368,13 @@ void PRNet::align(const Mat &img, const std::vector<Rect> &rects, std::vector<Ma
             warpAffine(face_img, aligned_face, affine, Size(112, 112));
 
             startT = std::chrono::system_clock::now();
-            matUnnormalize(aligned_face);
+            matUnnormalize(aligned_face, 255.f);
             endT = std::chrono::system_clock::now();
             ms = endT - startT;
             std::cout << "align face. elapsed = " << ms.count() << " [ms] " << std::endl;
             aligned_face.convertTo(aligned_face, CV_8UC3);
 //            imshow("aligned", aligned_face);
         }
-
         alignedFaces.push_back(aligned_face);
 
 
