@@ -3,9 +3,7 @@
 
 #include <string>
 
-#include "image.h"
 #include "face-data.h"
-#include "face_cropper.h"
 #include <opencv2/opencv.hpp>
 namespace prnet {
 
@@ -15,7 +13,6 @@ public:
     ~PRNet();
     int init(const std::string& graph_filename, const std::string& data_dirname);
     bool load(const std::string& graph_filename);
-    bool predict(const Image<float>& inp_img, Image<float>& out_img);
     bool predict(const cv::Mat& inp_img, cv::Mat & out_img);
 
     /**
@@ -38,6 +35,7 @@ private:
     cv::Mat_<double> getAffineKpt(const cv::Mat &pos_img, int kptNum=5);
 
     class Impl;
+    class FaceCropper{};
     FaceData face_data;
     FaceCropper cropper;
     std::unique_ptr<Impl> impl;

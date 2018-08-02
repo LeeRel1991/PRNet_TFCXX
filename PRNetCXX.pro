@@ -22,21 +22,13 @@ DEFINES += QT_DEPRECATED_WARNINGS
 
 HEADERS += \
   ./src/tf_predictor.h \
-  ./src/stb_image_write.h \
-  ./src/stb_image.h \
-  ./src/mesh.h \
-  ./src/image_impl.h \
-  ./src/image.h \
-  ./src/face_frontalizer.h \
-  ./src/face_cropper.h \
   ./src/face-data.h \
-  ./src/cxxopts.hpp
+  ./src/cxxopts.hpp \
+  ./src/simple_timer.h
 
 SOURCES += \
  ./src/tf_predictor.cc \
  ./src/main.cc \
- ./src/face_frontalizer.cc \
- ./src/face_cropper.cc \
  ./src/face-data.cc
 
 CONFIG(debug, debug|release) {

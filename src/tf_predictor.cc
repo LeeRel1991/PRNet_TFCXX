@@ -28,7 +28,7 @@
 #include <opencv2/opencv.hpp>
 #include <sstream>
 #include <fstream>
-
+#include "simple_timer.h"
 
 using namespace tensorflow;
 using namespace cv;
@@ -131,8 +131,6 @@ public:
 
     bool predict(const cv::Mat& inp_img, cv::Mat & out_img);
 
-    bool predict(const Image<float>& inp_img, Image<float>& out_img);
-
 private:
     std::unique_ptr<tensorflow::Session> session;
     std::string input_layer, output_layer;
@@ -169,15 +167,14 @@ bool PRNet::Impl::predict(const cv::Mat& inp_img, cv::Mat & out_img)
     Tensor input_tensor(DT_FLOAT, {1, inp_height, inp_width, inp_channels});
     memcpy(input_tensor.flat<float>().data(), inp_img.data, inp_width * inp_height * inp_channels * sizeof(float) );
 
-    auto startT = std::chrono::system_clock::now();
-
     // Run
-    Status run_status = session->Run({{input_layer, input_tensor}},
-                                 {output_layer}, {}, &output_tensors);
+    Status run_status;
+    {
+        SimpleTimer timer("tf_forward");
+        run_status = session->Run({{input_layer, input_tensor}},
+                                     {output_layer}, {}, &output_tensors);
+    }
 
-    auto endT = std::chrono::system_clock::now();
-    std::chrono::duration<double, std::milli> ms = endT - startT;
-    std::cout << "Ran forward. elapsed = " << ms.count() << " [ms] " << std::endl;
     if (!run_status.ok()) {
         std::cerr << "Running model failed: " << run_status;
         return false;
@@ -199,54 +196,7 @@ bool PRNet::Impl::predict(const cv::Mat& inp_img, cv::Mat & out_img)
     matUnnormalize(out_img, 256*1.1f);
 
     return true;
-}
-
-bool PRNet::Impl::predict(const Image<float>& inp_img, Image<float>& out_img)
-{
-    // Copy from input image
-    Eigen::Index inp_width = static_cast<Eigen::Index>(inp_img.getWidth()),
-            inp_height = static_cast<Eigen::Index>(inp_img.getHeight()),
-            inp_channels = static_cast<Eigen::Index>(inp_img.getChannels());
-    Tensor input_tensor(DT_FLOAT, {1, inp_height, inp_width, inp_channels});
-    // TODO: No copy
-    std::copy_n(inp_img.getData(), inp_width * inp_height * inp_channels,
-                input_tensor.flat<float>().data());
-
-    auto startT = std::chrono::system_clock::now();
-
-    // Run
-    std::vector<Tensor> output_tensors;
-    Status run_status = session->Run({{input_layer, input_tensor}},
-                                     {output_layer}, {}, &output_tensors);
-
-    auto endT = std::chrono::system_clock::now();
-    std::chrono::duration<double, std::milli> ms = endT - startT;
-    std::cout << "Image Ran forward. elapsed = " << ms.count() << " [ms] " << std::endl;
-
-    if (!run_status.ok()) {
-        std::cerr << "Running model failed: " << run_status;
-        return false;
-    }
-    const Tensor& output_tensor = output_tensors[0];
-
-    // Copy to output image
-    TTypes<float, 4>::ConstTensor tensor = output_tensor.tensor<float, 4>();
-    assert(tensor.dimension(0) == 1);
-    size_t out_height = static_cast<size_t>(tensor.dimension(1));
-    size_t out_width = static_cast<size_t>(tensor.dimension(2));
-    size_t out_channels = static_cast<size_t>(tensor.dimension(3));
-    out_img.create(out_width, out_height, out_channels);
-
-    out_img.foreach([&](int x, int y, int c, float& v)
-    {
-        v = tensor(0, y, x, c);
-    });
-
-    return true;
-}
-
-// PImpl pattern
-
+}// PImpl pattern
 
 PRNet::PRNet():
     impl(new Impl())
@@ -270,9 +220,6 @@ bool PRNet::predict(const cv::Mat& inp_img, cv::Mat & out_img) {
     return impl->predict(inp_img, out_img);
 }
 
-bool PRNet::predict(const Image<float>& inp_img, Image<float>& out_img) {
-    return impl->predict(inp_img, out_img);
-}
 
 void PRNet::preprocess(const Mat &img, Mat &img_float)
 {
@@ -329,29 +276,21 @@ void PRNet::align(const Mat &img, const std::vector<Rect> &rects, std::vector<Ma
 
     for( auto rect:rects)
     {
-        auto startT = std::chrono::system_clock::now();
         Mat face_img = img(rect).clone();
         Mat uv_map;
+        {
+            SimpleTimer timer("impl->predict uv map");
+            impl->predict(face_img, uv_map);
+        }
 
-        // TODO forward 前后时间优化
-        impl->predict(face_img, uv_map);
-
-        auto endT = std::chrono::system_clock::now();
-        std::chrono::duration<double, std::milli> ms = endT - startT;
-        std::cout << "predict. elapsed = " << ms.count() << " [ms] " << std::endl;
-
-        // get five key points
-        //矫正
-        startT = std::chrono::system_clock::now();
-        Mat_<double> spareKpt = getAffineKpt(uv_map, 5);
-
-        endT = std::chrono::system_clock::now();
-        ms = endT - startT;
-        std::cout << "getAffineKpt. elapsed = " << ms.count() << " [ms] " << std::endl;
+        Mat_<double> spareKpt;
+        // get five key points   //矫正
+        {
+            SimpleTimer timer("getAffineKpt");
+            spareKpt = getAffineKpt(uv_map, 5);
+        }
 
         Mat aligned_face;
-
-        startT = std::chrono::system_clock::now();
         Mat_<double> alignTemplete(5, 2);
         for (int i=0; i<5; ++i)
         {
@@ -366,14 +305,10 @@ void PRNet::align(const Mat &img, const std::vector<Rect> &rects, std::vector<Ma
         {
 
             warpAffine(face_img, aligned_face, affine, Size(112, 112));
-
-            startT = std::chrono::system_clock::now();
             matUnnormalize(aligned_face, 255.f);
-            endT = std::chrono::system_clock::now();
-            ms = endT - startT;
-            std::cout << "align face. elapsed = " << ms.count() << " [ms] " << std::endl;
+
             aligned_face.convertTo(aligned_face, CV_8UC3);
-//            imshow("aligned", aligned_face);
+            imshow("aligned", aligned_face);
         }
         alignedFaces.push_back(aligned_face);
 
