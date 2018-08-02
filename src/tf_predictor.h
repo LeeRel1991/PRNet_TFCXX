@@ -4,6 +4,7 @@
 #include <string>
 
 #include "face-data.h"
+#include "face_aligner.h"
 #include <opencv2/opencv.hpp>
 namespace prnet {
 
@@ -11,8 +12,8 @@ class PRNet {
 public:
     PRNet();
     ~PRNet();
-    int init(const std::string& graph_filename, const std::string& data_dirname);
-    bool load(const std::string& graph_filename);
+    int init(const std::string& graph_file, const std::string& data_dirname, const int gpu_id);
+    bool load(const std::string& graph_file);
     bool predict(const cv::Mat& inp_img, cv::Mat & out_img);
 
     /**
@@ -36,6 +37,7 @@ private:
 
     class Impl;
     class FaceCropper{};
+    FaceAligner aligner;
     FaceData face_data;
     FaceCropper cropper;
     std::unique_ptr<Impl> impl;

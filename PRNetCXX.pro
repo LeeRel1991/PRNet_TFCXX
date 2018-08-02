@@ -24,12 +24,14 @@ HEADERS += \
   ./src/tf_predictor.h \
   ./src/face-data.h \
   ./src/cxxopts.hpp \
-  ./src/simple_timer.h
+  ./src/simple_timer.h \
+  ./src/face_aligner.h
 
 SOURCES += \
  ./src/tf_predictor.cc \
  ./src/main.cc \
- ./src/face-data.cc
+ ./src/face-data.cc \
+ ./src/face_aligner.cpp
 
 CONFIG(debug, debug|release) {
     DESTDIR = $$PWD/build/debug

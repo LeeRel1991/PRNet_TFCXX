@@ -76,9 +76,8 @@ int main(int argc, char **argv)
 
     // Predict
     PRNet tf_predictor;
-    if(0!=tf_predictor.init(pb_model, uv_files))
+    if(0!=tf_predictor.init(pb_model, uv_files, 0))
     {
-
         std::cout << "Initialized tf model fails" << std::endl;
         return -1;
     }

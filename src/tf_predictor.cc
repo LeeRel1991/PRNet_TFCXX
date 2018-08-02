@@ -1,28 +1,13 @@
 #include "tf_predictor.h"
 
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Weverything"
-#endif
-
-#include "tensorflow/cc/ops/const_op.h"
-#include "tensorflow/cc/ops/image_ops.h"
-#include "tensorflow/cc/ops/standard_ops.h"
-#include "tensorflow/core/framework/graph.pb.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/graph/default_device.h"
-#include "tensorflow/core/graph/graph_def_builder.h"
 #include "tensorflow/core/lib/core/errors.h"
-#include "tensorflow/core/lib/core/stringpiece.h"
-#include "tensorflow/core/lib/core/threadpool.h"
-#include "tensorflow/core/lib/io/path.h"
-#include "tensorflow/core/lib/strings/stringprintf.h"
+
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/platform/init_main.h"
 #include "tensorflow/core/platform/logging.h"
-#include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/public/session.h"
-#include "tensorflow/core/util/command_line_flags.h"
 #include "tensorflow/core/protobuf/config.pb.h"
 
 #include <opencv2/opencv.hpp>
@@ -36,7 +21,7 @@ using namespace std;
 
 #define DrawKpt(img, kpt) \
 for(int i = 0;i < kpt.rows; i++){ \
-     circle(img, Point2d(kpt(i,0), kpt(i,1)),3, Scalar(255, 255, 0), -1, 8, 0); \
+     circle(img, Point2d(kpt(i,0), kpt(i,1)), 3, Scalar(255, 255, 0), -1, 8, 0); \
 }
 
 
@@ -69,54 +54,48 @@ for(int i = 0;i < kpt.rows; i++){ \
 }
 
 
-static double kptTemplete[][2]={{38.2946, 51.6963},
-                                {73.5318, 51.5014},
-                                {56.0252, 71.7366},
-                                {41.5493, 92.3655},
-                                {70.7299, 92.204}};
-
-
 namespace prnet {
 
-namespace {
 
 // Reads a model graph definition from disk, and creates a session object you
 // can use to run it.
-Status LoadGraph(const string& graph_file_name,
-                 std::unique_ptr<tensorflow::Session>* session) {
 
-    tensorflow::GraphDef graph_def;
-    Status load_graph_status =
-        ReadBinaryProto(tensorflow::Env::Default(), graph_file_name, &graph_def);
-    if (!load_graph_status.ok()) {
-      return tensorflow::errors::NotFound("Failed to load compute graph at '",
-                                          graph_file_name, "'");
+Status LoadGraph(const string& graph_file,
+                 std::unique_ptr<Session>* session,
+                 const int gpu_id) {
+
+    /**
+     * @note gpuOpts.set_visible_device_list(stream.str())报内存错误，
+     * 因此使用graph::SetDefaultDevice
+     * @todo 测试二者区别
+     */
+    std::stringstream stream;
+    stream << "/device:GPU:" << gpu_id;
+    GraphDef graph_def;
+    graph::SetDefaultDevice(stream.str(), &graph_def);
+
+    Status status = ReadBinaryProto(Env::Default(), graph_file, &graph_def);
+    if (!status.ok()) {
+        return errors::NotFound("Failed to load compute graph at '", graph_file, "'");
     }
 
-    tensorflow::SessionOptions opts;
-
+    SessionOptions opts;
     GPUOptions *gpuOpts = new GPUOptions;
-    int gpu_id = 0;
-    std::stringstream stream;
-    stream << gpu_id;
 
     gpuOpts->set_per_process_gpu_memory_fraction(0.3);
     gpuOpts->set_allow_growth(true);
-//    gpuOpts.set_visible_device_list(stream.str());
     opts.config.set_allocated_gpu_options(gpuOpts);
-    opts.config.set_log_device_placement(true);
+    //opts.config.set_log_device_placement(true);
 
-    Session* tmp = tensorflow::NewSession(opts);
+    Session* tmp = NewSession(opts);
 
-  session->reset(tmp);
-  Status session_create_status = (*session)->Create(graph_def);
-  if (!session_create_status.ok()) {
-    return session_create_status;
-  }
-  return Status::OK();
+    session->reset(tmp);
+    status = (*session)->Create(graph_def);
+    if (!status.ok()) {
+        return status;
+    }
+    return Status::OK();
 }
-
-} // anonymous namespace
 
 class PRNet::Impl {
 public:
@@ -125,10 +104,7 @@ public:
 //        tensorflow::port::InitMain(argv[0], &argc, &argv);
 //    }
 
-    int load(const std::string& graph_filename,
-             const std::string& inp_layer,
-             const std::string& out_layer);
-
+    int load(const std::string& graph_file, const int gpu_id);
     bool predict(const cv::Mat& inp_img, cv::Mat & out_img);
 
 private:
@@ -136,21 +112,19 @@ private:
     std::string input_layer, output_layer;
 };
 
-int PRNet::Impl::load(const std::string& graph_filename,
-         const std::string& inp_layer,
-         const std::string& out_layer)
+int PRNet::Impl::load(const std::string& graph_file, const int gpu_id)
 {
 
     // First we load and initialize the model.
-    Status load_graph_status = LoadGraph(graph_filename, &session);
+    Status load_graph_status = LoadGraph(graph_file, &session, gpu_id );
     if (!load_graph_status.ok())
     {
         std::cerr << load_graph_status;
         return -1;
     }
 
-    input_layer = inp_layer;
-    output_layer = out_layer;
+    input_layer = "Placeholder";
+    output_layer = "resfcn256/Conv2d_transpose_16/Sigmoid";
 
     return 0;
 }
@@ -158,14 +132,16 @@ int PRNet::Impl::load(const std::string& graph_filename,
 bool PRNet::Impl::predict(const cv::Mat& inp_img, cv::Mat & out_img)
 {
     // Copy from input image
-    Eigen::Index inp_width = static_cast<Eigen::Index>(inp_img.cols),
-            inp_height = static_cast<Eigen::Index>(inp_img.rows),
-            inp_channels = static_cast<Eigen::Index>(inp_img.channels());
+    Eigen::Index inp_w = static_cast<Eigen::Index>(inp_img.cols),
+            inp_h = static_cast<Eigen::Index>(inp_img.rows),
+            inp_ch = static_cast<Eigen::Index>(inp_img.channels());
 
     // TODO: No copy
     std::vector<Tensor> output_tensors;
-    Tensor input_tensor(DT_FLOAT, {1, inp_height, inp_width, inp_channels});
-    memcpy(input_tensor.flat<float>().data(), inp_img.data, inp_width * inp_height * inp_channels * sizeof(float) );
+    Tensor input_tensor(DT_FLOAT, {1, inp_h, inp_w, inp_ch});
+    memcpy(input_tensor.flat<float>().data(),
+           inp_img.data,
+           inp_w * inp_h * inp_ch * sizeof(float) );
 
     // Run
     Status run_status;
@@ -186,13 +162,13 @@ bool PRNet::Impl::predict(const cv::Mat& inp_img, cv::Mat & out_img)
 
     assert(tensor.dimension(0) == 1);
     assert(tensor.dimension(3) == 3);
-    size_t out_height = static_cast<size_t>(tensor.dimension(1)),
-            out_width = static_cast<size_t>(tensor.dimension(2));
+    size_t out_h = static_cast<size_t>(tensor.dimension(1)),
+            out_w = static_cast<size_t>(tensor.dimension(2));
 
     //Warn: 默认3通道彩色图，所以没做条件判断
-    out_img.create(out_width, out_height, CV_32FC3);
+    out_img.create(out_w, out_h, CV_32FC3);
     const float* data = tensor.data();
-    memcpy(out_img.data, data, out_height * out_width * 3 * sizeof(float));
+    memcpy(out_img.data, data, out_h * out_w * 3 * sizeof(float));
     matUnnormalize(out_img, 256*1.1f);
 
     return true;
@@ -206,13 +182,13 @@ PRNet::PRNet():
 
 PRNet::~PRNet() {}
 
-int PRNet::init(const std::string& graph_filename, const std::string& data_dirname)
+int PRNet::init(const std::string& graph_file, const std::string& data_dirname, const int gpu_id)
 {
     if (!LoadFaceData(data_dirname, &face_data)) {
         return -1;
     }
 
-    return impl->load(graph_filename, "Placeholder", "resfcn256/Conv2d_transpose_16/Sigmoid");
+    return impl->load(graph_file, gpu_id);
 }
 
 
@@ -224,13 +200,14 @@ bool PRNet::predict(const cv::Mat& inp_img, cv::Mat & out_img) {
 void PRNet::preprocess(const Mat &img, Mat &img_float)
 {
     cvtColor(img, img_float, COLOR_BGR2RGB);
-    img_float.convertTo(img_float, CV_32FC3);
-
-    matNormalize(img_float);
+    //img_float.convertTo(img_float, CV_32FC3);
+    //matNormalize(img_float);
 }
 
 Mat_<double> PRNet::getAffineKpt(const Mat &pos_img, int kptNum)
 {
+    // TODO 0.006ms, need to code improve
+    //SimpleTimer timer("getAffineKpt");
     const size_t n_pt = face_data.uv_kpt_indices.size() / 2;
     Mat_<double> kpt68(n_pt, 2);
     for (size_t i = 0; i < n_pt; i++)
@@ -242,7 +219,6 @@ Mat_<double> PRNet::getAffineKpt(const Mat &pos_img, int kptNum)
         const int y = int(pos_img.at<Vec3f>(y_idx, x_idx)[1]);
 
         // Draw circle
-//        circle(img, Point(x, y), 3,  Scalar(255,0,0), -1, 0, 0);
         kpt68(i, 0) = x;
         kpt68(i, 1) = y;
     }
@@ -274,47 +250,34 @@ Mat_<double> PRNet::getAffineKpt(const Mat &pos_img, int kptNum)
 void PRNet::align(const Mat &img, const std::vector<Rect> &rects, std::vector<Mat> &alignedFaces)
 {
 
+    Mat img_float;
+    img.convertTo(img_float, CV_32FC3);
+    matNormalize(img_float);
+
+
     for( auto rect:rects)
     {
-        Mat face_img = img(rect).clone();
-        Mat uv_map;
+        Mat face_img = img_float(rect);
+        Mat uv_map, aligned_face;
+        Mat_<double> spareKpt;
         {
             SimpleTimer timer("impl->predict uv map");
             impl->predict(face_img, uv_map);
         }
 
-        Mat_<double> spareKpt;
-        // get five key points   //矫正
+        // get five key points  矫正
         {
             SimpleTimer timer("getAffineKpt");
             spareKpt = getAffineKpt(uv_map, 5);
+            aligned_face = aligner.align_by_kpt(img(rect), spareKpt);
+            //matUnnormalize(aligned_face, 255.f);
+            //aligned_face.convertTo(aligned_face, CV_8UC3);
+            alignedFaces.push_back(aligned_face);
         }
-
-        Mat aligned_face;
-        Mat_<double> alignTemplete(5, 2);
-        for (int i=0; i<5; ++i)
-        {
-            alignTemplete(i, 0) = kptTemplete[i][0];
-            alignTemplete(i, 1) = kptTemplete[i][1];
-        }
-
-        Mat affine = estimateRigidTransform(spareKpt, alignTemplete, false);
-        if (affine.rows==0 || affine.cols==0)
-            cout << "warning: affine matrix empty! \n";
-        else
-        {
-
-            warpAffine(face_img, aligned_face, affine, Size(112, 112));
-            matUnnormalize(aligned_face, 255.f);
-
-            aligned_face.convertTo(aligned_face, CV_8UC3);
-            imshow("aligned", aligned_face);
-        }
-        alignedFaces.push_back(aligned_face);
-
 
 #ifdef DRAW_IMG
         DrawKpt(face_img, spareKpt);
+        imshow("aligned", aligned_face);
         imshow("kpt", face_img);
         waitKey(1);
 #endif
