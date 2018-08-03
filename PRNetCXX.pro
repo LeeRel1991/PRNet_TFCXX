@@ -19,19 +19,21 @@ DEFINES += QT_DEPRECATED_WARNINGS
 # In order to do so, uncomment the following line.
 # You can also select to disable deprecated APIs only up to a certain version of Qt.
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
+#DEFINES += DRAW_IMG
 
 HEADERS += \
-  ./src/tf_predictor.h \
-  ./src/face-data.h \
-  ./src/cxxopts.hpp \
-  ./src/simple_timer.h \
-  ./src/face_aligner.h
+    ./src/tf_predictor.h \
+    ./src/face-data.h \
+    ./src/cxxopts.hpp \
+    ./src/simple_timer.h \
+    ./src/face_aligner.h \
+    src/utils.h
 
 SOURCES += \
- ./src/tf_predictor.cc \
- ./src/main.cc \
- ./src/face-data.cc \
- ./src/face_aligner.cpp
+    ./src/tf_predictor.cc \
+    ./src/main.cc \
+    ./src/face-data.cc \
+    ./src/face_aligner.cpp
 
 CONFIG(debug, debug|release) {
     DESTDIR = $$PWD/build/debug
@@ -42,6 +44,7 @@ else {
 
 INCLUDEPATH += ./src
 
+# tensorflow and dependencies
 INCLUDEPATH += /home/lirui/packages/tensorflow \
 /home/lirui/packages/tensorflow/bazel-tensorflow \
 /home/lirui/packages/tensorflow/bazel-bin/tensorflow \
@@ -51,8 +54,28 @@ INCLUDEPATH += /home/lirui/packages/tensorflow \
 /home/lirui/packages/tensorflow/bazel-tensorflow/external/nsync/public \
 /home/lirui/packages/tensorflow/bazel-tensorflow
 
-LIBS += -L/home/lirui/packages/tensorflow/bazel-bin/tensorflow -ltensorflow_cc
+LIBS += -L/home/lirui/packages/tensorflow/bazel-bin/tensorflow
 
+LIBS += -ltensorflow_cc \
+        -L/usr/local/lib -lprotobuf
+
+#opencv
 INCLUDEPATH += /usr/local/include
-LIBS += -L/usr/local/lib -lprotobuf
 LIBS += /usr/local/lib/libopencv_*.so
+
+
+# mobilenet-SSD-mxnet 人脸检测
+INCLUDEPATH += $$PWD/third_party/mobileSSD_MX/sample
+
+HEADERS += \
+    $$PWD/third_party/mobileSSD_MX/sample/mxnet_ssd_classifier.h \
+    $$PWD/third_party/mobileSSD_MX/sample/c_predict_api.h
+
+SOURCES += $$PWD/third_party/mobileSSD_MX/sample/mxnet_ssd_classifier.cpp
+
+INCLUDEPATH += /home/lirui/packages/mxnet-1.1.0/include
+LIBS += -L/home/lirui/packages/mxnet-1.1.0/lib -lmxnet
+
+# 其他非源码文件
+DISTFILES += \
+    README.md

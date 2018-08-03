@@ -14,48 +14,12 @@
 #include <sstream>
 #include <fstream>
 #include "simple_timer.h"
-
+#include "utils.h"
 using namespace tensorflow;
 using namespace cv;
 using namespace std;
 
-#define DrawKpt(img, kpt) \
-for(int i = 0;i < kpt.rows; i++){ \
-     circle(img, Point2d(kpt(i,0), kpt(i,1)), 3, Scalar(255, 255, 0), -1, 8, 0); \
-}
-
-
-#define matNormalize(img) \
-{\
-    int nr = img.rows; \
-    int nc = img.cols * img.channels(); \
-    for(int i = 0; i < nr; ++i) \
-    { \
-        float* data = img.ptr<float>(i); \
-        for(int j= 0; j< nc; ++j) \
-        { \
-            data[j]=  data[j]/255.f; \
-        } \
-    }\
-}
-
-#define matUnnormalize(img,scale) \
-{\
-    int nr = img.rows; \
-    int nc = img.cols * img.channels(); \
-    for(int i = 0; i < nr; ++i) \
-    { \
-        float* data = img.ptr<float>(i); \
-        for(int j= 0; j< nc; ++j) \
-        { \
-            data[j]=  data[j]*scale; \
-        } \
-    }\
-}
-
-
 namespace prnet {
-
 
 // Reads a model graph definition from disk, and creates a session object you
 // can use to run it.
@@ -97,13 +61,28 @@ Status LoadGraph(const string& graph_file,
     return Status::OK();
 }
 
+
+void FaceCropper::crop(const Mat src, Rect bbox, Mat &dst)
+{
+
+    float old_size = (bbox.width + bbox.height)/2.0;
+    float centor_x = bbox.x + bbox.width/2.0;
+    float center_y = bbox.y + bbox.height/2.0;
+
+    int dst_size = int(old_size * 1.2);
+    dst_size = min(dst_size, src.rows - (int)center_y);
+    dst_size = min(dst_size, src.cols - (int)centor_x);
+
+    int dst_x = max((int)(centor_x - dst_size/2.0), 0);
+    int dst_y = max((int)(center_y - dst_size/2.0), 0);
+
+    Rect dst_bbox(dst_x, dst_y, dst_size, dst_size);
+    resize(src(dst_bbox), dst, Size(256,256));
+
+}
+
 class PRNet::Impl {
 public:
-//    void init(int argc, char* argv[]) {
-//        // We need to call this to set up global state for TensorFlow.
-//        tensorflow::port::InitMain(argv[0], &argc, &argv);
-//    }
-
     int load(const std::string& graph_file, const int gpu_id);
     bool predict(const cv::Mat& inp_img, cv::Mat & out_img);
 
@@ -166,9 +145,10 @@ bool PRNet::Impl::predict(const cv::Mat& inp_img, cv::Mat & out_img)
             out_w = static_cast<size_t>(tensor.dimension(2));
 
     //Warn: 默认3通道彩色图，所以没做条件判断
-    out_img.create(out_w, out_h, CV_32FC3);
     const float* data = tensor.data();
+    out_img.create(out_w, out_h, CV_32FC3);
     memcpy(out_img.data, data, out_h * out_w * 3 * sizeof(float));
+
     matUnnormalize(out_img, 256*1.1f);
 
     return true;
@@ -200,8 +180,6 @@ bool PRNet::predict(const cv::Mat& inp_img, cv::Mat & out_img) {
 void PRNet::preprocess(const Mat &img, Mat &img_float)
 {
     cvtColor(img, img_float, COLOR_BGR2RGB);
-    //img_float.convertTo(img_float, CV_32FC3);
-    //matNormalize(img_float);
 }
 
 Mat_<double> PRNet::getAffineKpt(const Mat &pos_img, int kptNum)
@@ -249,40 +227,38 @@ Mat_<double> PRNet::getAffineKpt(const Mat &pos_img, int kptNum)
 
 void PRNet::align(const Mat &img, const std::vector<Rect> &rects, std::vector<Mat> &alignedFaces)
 {
-
-    Mat img_float;
-    img.convertTo(img_float, CV_32FC3);
-    matNormalize(img_float);
-
-
     for( auto rect:rects)
     {
-        Mat face_img = img_float(rect);
+        Mat face_img, face_float;
+        cropper.crop(img, rect, face_img);
+        face_img.convertTo(face_float, CV_32FC3);
+        matNormalize(face_float, 255.f);
+
         Mat uv_map, aligned_face;
         Mat_<double> spareKpt;
         {
             SimpleTimer timer("impl->predict uv map");
-            impl->predict(face_img, uv_map);
+            impl->predict(face_float, uv_map);
         }
-
+        if(uv_map.rows==0 || uv_map.cols ==0)
+        {
+            aligned_face = face_img.clone();
+            continue;
+        }
         // get five key points  矫正
         {
             SimpleTimer timer("getAffineKpt");
             spareKpt = getAffineKpt(uv_map, 5);
-            aligned_face = aligner.align_by_kpt(img(rect), spareKpt);
-            //matUnnormalize(aligned_face, 255.f);
-            //aligned_face.convertTo(aligned_face, CV_8UC3);
-            alignedFaces.push_back(aligned_face);
+            aligned_face = aligner.align_by_kpt(face_img, spareKpt);
+
         }
+        alignedFaces.push_back(aligned_face);
 
 #ifdef DRAW_IMG
         DrawKpt(face_img, spareKpt);
-        imshow("aligned", aligned_face);
         imshow("kpt", face_img);
         waitKey(1);
 #endif
-
-
     }
 }
 

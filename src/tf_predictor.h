@@ -8,6 +8,14 @@
 #include <opencv2/opencv.hpp>
 namespace prnet {
 
+class FaceCropper{
+
+public:
+    void crop(const cv::Mat src, cv::Rect bbox, cv::Mat& dst);
+
+};
+
+
 class PRNet {
 public:
     PRNet();
@@ -36,7 +44,6 @@ private:
     cv::Mat_<double> getAffineKpt(const cv::Mat &pos_img, int kptNum=5);
 
     class Impl;
-    class FaceCropper{};
     FaceAligner aligner;
     FaceData face_data;
     FaceCropper cropper;
