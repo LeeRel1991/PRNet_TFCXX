@@ -84,7 +84,7 @@ void FaceCropper::crop(const Mat src, Rect bbox, Mat &dst)
 class PRNet::Impl {
 public:
     int load(const std::string& graph_file, const int gpu_id);
-    bool predict(const cv::Mat& inp_img, cv::Mat & out_img);
+    bool predict(const cv::Mat& inp_img, cv::Mat_<float>& out_img);
 
 private:
     std::unique_ptr<tensorflow::Session> session;
@@ -93,7 +93,6 @@ private:
 
 int PRNet::Impl::load(const std::string& graph_file, const int gpu_id)
 {
-
     // First we load and initialize the model.
     Status load_graph_status = LoadGraph(graph_file, &session, gpu_id );
     if (!load_graph_status.ok())
@@ -103,12 +102,13 @@ int PRNet::Impl::load(const std::string& graph_file, const int gpu_id)
     }
 
     input_layer = "Placeholder";
-    output_layer = "resfcn256/Conv2d_transpose_16/Sigmoid";
+    output_layer = "resfcn256/Reshape";
+//    output_layer = "resfcn256/Conv2d_transpose_16/Sigmoid";
 
     return 0;
 }
 
-bool PRNet::Impl::predict(const cv::Mat& inp_img, cv::Mat & out_img)
+bool PRNet::Impl::predict(const cv::Mat& inp_img, cv::Mat_<float> & out_img)
 {
     // Copy from input image
     Eigen::Index inp_w = static_cast<Eigen::Index>(inp_img.cols),
@@ -123,12 +123,8 @@ bool PRNet::Impl::predict(const cv::Mat& inp_img, cv::Mat & out_img)
            inp_w * inp_h * inp_ch * sizeof(float) );
 
     // Run
-    Status run_status;
-    {
-        SimpleTimer timer("tf_forward");
-        run_status = session->Run({{input_layer, input_tensor}},
+    Status run_status = session->Run({{input_layer, input_tensor}},
                                      {output_layer}, {}, &output_tensors);
-    }
 
     if (!run_status.ok()) {
         std::cerr << "Running model failed: " << run_status;
@@ -140,16 +136,14 @@ bool PRNet::Impl::predict(const cv::Mat& inp_img, cv::Mat & out_img)
     TTypes<float, 4>::ConstTensor tensor = output_tensor.tensor<float, 4>();
 
     assert(tensor.dimension(0) == 1);
-    assert(tensor.dimension(3) == 3);
+    assert(tensor.dimension(3) == 1); //batch x 65536x3x1
     size_t out_h = static_cast<size_t>(tensor.dimension(1)),
             out_w = static_cast<size_t>(tensor.dimension(2));
 
-    //Warn: 默认3通道彩色图，所以没做条件判断
-    const float* data = tensor.data();
-    out_img.create(out_w, out_h, CV_32FC3);
-    memcpy(out_img.data, data, out_h * out_w * 3 * sizeof(float));
+    //Warn: 输出65536x3点云矩阵
+    out_img.create(out_h, out_w);
+    memcpy(out_img.data, tensor.data(), out_h * out_w * sizeof(float));
 
-    matUnnormalize(out_img, 256*1.1f);
 
     return true;
 }// PImpl pattern
@@ -172,7 +166,7 @@ int PRNet::init(const std::string& graph_file, const std::string& data_dirname, 
 }
 
 
-bool PRNet::predict(const cv::Mat& inp_img, cv::Mat & out_img) {
+bool PRNet::predict(const cv::Mat& inp_img, cv::Mat_<float> & out_img) {
     return impl->predict(inp_img, out_img);
 }
 
@@ -182,43 +176,38 @@ void PRNet::preprocess(const Mat &img, Mat &img_float)
     cvtColor(img, img_float, COLOR_BGR2RGB);
 }
 
-Mat_<double> PRNet::getAffineKpt(const Mat &pos_img, int kptNum)
+Mat_<float> PRNet::getAffineKpt(const Mat &pos_img, int kptNum)
 {
-    // TODO 0.006ms, need to code improve
-    //SimpleTimer timer("getAffineKpt");
-    const size_t n_pt = face_data.uv_kpt_indices.size() / 2;
-    Mat_<double> kpt68(n_pt, 2);
+    // Note 0.006ms total
+    //SimpleTimer timer("getAffineKpt00");
+    const size_t n_pt = face_data.uv_kpt_indices.size();
+    Mat_<float> kpt68(n_pt, 2);
+
+    float* data = (float*)pos_img.data;
     for (size_t i = 0; i < n_pt; i++)
     {
-        const uint32_t x_idx = face_data.uv_kpt_indices[i];
-        const uint32_t y_idx = face_data.uv_kpt_indices[i + n_pt];
-
-        const int x = int(pos_img.at<Vec3f>(y_idx, x_idx)[0]);
-        const int y = int(pos_img.at<Vec3f>(y_idx, x_idx)[1]);
-
-        // Draw circle
-        kpt68(i, 0) = x;
-        kpt68(i, 1) = y;
+        const uint32_t idx = face_data.uv_kpt_indices[i];
+        kpt68(i, 0) =  *(data + idx *3 + 0);
+        kpt68(i, 1) =  *(data + idx *3 + 1);
     }
 
 
-    Mat_<double> sparseKpt(kptNum, 2);
-
+    Mat_<float> sparseKpt(kptNum, 2);
+    int data_len = 2*sizeof(float);
     switch (kptNum) {
     case 5:
-        sparseKpt(2, 0) = kpt68(30, 0);
-        sparseKpt(2, 1) = kpt68(30, 1);
-        sparseKpt(3, 0) = kpt68(48, 0);
-        sparseKpt(3, 1) = kpt68(48, 1);
-        sparseKpt(4, 0) = kpt68(54, 0);
-        sparseKpt(4, 1) = kpt68(54, 1);
+        memcpy((float*)sparseKpt.data + 2 * 2, (float*)kpt68.data + 30*2, data_len);
+        memcpy((float*)sparseKpt.data + 3 * 2, (float*)kpt68.data + 48*2, data_len);
+        memcpy((float*)sparseKpt.data + 4 * 2, (float*)kpt68.data + 54*2, data_len);
 
         sparseKpt(0, 0) = (kpt68(36, 0) + kpt68(39, 0) ) /2;
         sparseKpt(0, 1) = (kpt68(37, 1) + kpt68(38, 1) + kpt68(40, 1) + kpt68(41, 1) ) /4;
         sparseKpt(1, 0) = (kpt68(42, 0) + kpt68(45, 0) ) /2;
         sparseKpt(1, 1) = (kpt68(43, 1) + kpt68(44, 1) + kpt68(46, 1) + kpt68(47, 1) ) /4;
         break;
+
     default:
+        sparseKpt = kpt68.clone();
         break;
     }
 
@@ -234,13 +223,13 @@ void PRNet::align(const Mat &img, const std::vector<Rect> &rects, std::vector<Ma
         face_img.convertTo(face_float, CV_32FC3);
         matNormalize(face_float, 255.f);
 
-        Mat uv_map, aligned_face;
-        Mat_<double> spareKpt;
+        Mat aligned_face;
+        Mat_<float> spareKpt, vertices3d;
         {
             SimpleTimer timer("impl->predict uv map");
-            impl->predict(face_float, uv_map);
+            impl->predict(face_float, vertices3d);
         }
-        if(uv_map.rows==0 || uv_map.cols ==0)
+        if(vertices3d.rows==0 || vertices3d.cols ==0)
         {
             aligned_face = face_img.clone();
             continue;
@@ -248,7 +237,7 @@ void PRNet::align(const Mat &img, const std::vector<Rect> &rects, std::vector<Ma
         // get five key points  矫正
         {
             SimpleTimer timer("getAffineKpt");
-            spareKpt = getAffineKpt(uv_map, 5);
+            spareKpt = getAffineKpt(vertices3d, 5);
             aligned_face = aligner.align_by_kpt(face_img, spareKpt);
 
         }

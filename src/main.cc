@@ -136,7 +136,7 @@ int main(int argc, char **argv)
             imshow("aligned", img);
         drawBoundingbox(frame, rects);
         imshow("frame", frame);
-        waitKey(0);
+        waitKey(1);
     }
 
   return 0;

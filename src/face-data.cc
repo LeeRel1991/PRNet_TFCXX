@@ -79,54 +79,56 @@ bool LoadFaceData(const std::string &datapath, FaceData *face_data)
 
   // Loads corresponding uv(pixel) location for landmark points in an image.
   {
-    std::string uv_filename = JoinPath(datapath, "uv_kpt_ind.txt");
+    std::string uv_filename = JoinPath(datapath, "uv_kpt_ind_vec.txt");
     std::ifstream ifs(uv_filename);
     if (!ifs) {
       std::cerr << "File not found or failed to open : " << uv_filename << std::endl;
       return false;
     }
 
-    std::string s;
-    while (ifs >> s) {
-      uint32_t val = static_cast<uint32_t>(std::stof(s));
-      face_data->uv_kpt_indices.push_back(val);
-      // std::cout << val << std::endl;
-    } 
+    std::string line;
+    while (std::getline(ifs, line)) {
+      // `face_ind.txt` stores integer data in scientific fp value.
+      // So first read as float, then cast to int.
+      uint32_t idx = static_cast<uint32_t>(std::stof(line));
+      face_data->uv_kpt_indices.push_back(idx);
+      //std::cout << idx << std::endl;
+    }
 
-    if (face_data->uv_kpt_indices.size() != (2 * 68)) {
+    if (face_data->uv_kpt_indices.size() != (1 * 68)) {
       std::cerr << "Invalid number of UV values. Must be 2 * 68, but got " << face_data->uv_kpt_indices.size() << std::endl;
       return false; 
     }
   }
 
   // Load canonical vertices
-  {
-    std::string triangles_filename = JoinPath(datapath, "canonical_vertices.txt");
-    std::ifstream ifs(triangles_filename);
-    if (!ifs) {
-      std::cerr << "File not found or failed to open : " << triangles_filename << std::endl;
-      return false;
-    }
+//  {
+//    std::string triangles_filename = JoinPath(datapath, "canonical_vertices.txt");
+//    std::ifstream ifs(triangles_filename);
+//    if (!ifs) {
+//      std::cerr << "File not found or failed to open : " << triangles_filename << std::endl;
+//      return false;
+//    }
 
-    std::string line;
-    while (std::getline(ifs, line)) {
-      std::stringstream ss(line);
-      std::string xs, ys, zs;
+//    std::string line;
+//    while (std::getline(ifs, line)) {
+//      std::stringstream ss(line);
+//      std::string xs, ys, zs;
 
-      ss >> xs >> ys >> zs;
+//      ss >> xs >> ys >> zs;
 
-      float x = std::stof(xs);
-      float y = std::stof(ys);
-      float z = std::stof(zs);
+//      float x = std::stof(xs);
+//      float y = std::stof(ys);
+//      float z = std::stof(zs);
 
-      face_data->canonical_vertices.push_back(std::array<float, 3>{x, y, z});
-    }
+//      face_data->canonical_vertices.push_back(std::array<float, 3>{x, y, z});
+//    }
 
-    if (face_data->canonical_vertices.size() != 43867) {
-      std::cerr << "Invalid number of canonical vertices. Must be 43867, but got " << face_data->canonical_vertices.size() << std::endl;
-      return false;
-    }
-  }
+//    if (face_data->canonical_vertices.size() != 43867) {
+//      std::cerr << "Invalid number of canonical vertices. Must be 43867, but got " << face_data->canonical_vertices.size() << std::endl;
+//      return false;
+//    }
+//  }
 
   return true;
 }
