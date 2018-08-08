@@ -91,8 +91,10 @@ vector<vector<Mat1f > > kpts_batch;
     tf_predictor.predict(img_batch, rects_batch, kpts_batch);
 }
 
+int i=0;
 for(auto kpt:kpts_batch[0]){
-    DrawKpt(frame, kpt);
+    Mat roi = frame(rects[i++]);
+    DrawKpt(roi, kpt);
 }
 
 drawBoundingbox(frame, rects);

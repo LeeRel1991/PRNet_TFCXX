@@ -88,9 +88,14 @@ void FaceCropper::crop(const Mat src, Rect& bbox, Mat &dst)
 
 }
 
-void FaceCropper::remapLandmarks(Mat1f src, Mat1f& dst, Rect cropped_rect)
+void FaceCropper::remapLandmarks(Mat1f& arr, Rect src_rect, Rect dst_rect)
 {
-
+    int old_x = max(dst_rect.x, 0);
+    int old_y = max(dst_rect.y, 0);
+    for(int k=0; k< arr.rows; ++k){
+        arr(k, 0) = arr(k, 0) * src_rect.width/256 + src_rect.x - old_x;
+        arr(k, 1) = arr(k, 1) * src_rect.height/256 + src_rect.y - old_y;
+    }
 
 }
 
@@ -227,22 +232,27 @@ void PRNet::predict(const std::vector<Mat> &imgs,
     }
 
     // output remap to original boundingbox
+    SimpleTimer timer("remap output landmarks");
     landmarks.resize(imgs_batch.size());
     auto it_kpt = vertices3d_batch.cbegin();
     for(int i=0; i<imgs.size(); ++i){
         int bbox_cnt = rects[i].size();
 
-        //landmarks[i].assign(it_kpt, it_kpt + bbox_cnt-1);
-        //it_kpt += bbox_cnt;
         for(int j=0; j< bbox_cnt; ++j){
-            Rect r = new_rects[i][j];
             Mat1f kpt = getAffineKpt(*it_kpt, 5);
-            for(int k=0; k<5; ++k){
-                kpt(k, 0) = kpt(k, 0)*r.width/256 + r.x;
-                kpt(k, 1) = kpt(k, 1)*r.height/256 + r.y;
-            }
+            cropper.remapLandmarks(kpt, new_rects[i][j], rects[i][j]);
+
             landmarks[i].push_back(kpt);
             it_kpt++;
+
+#ifdef DRAW_IMG
+            Mat face_img = imgs[i](rects[i][j]);
+            DrawKpt(face_img, kpt);
+            char tmp[10];
+            sprintf(tmp, "kpt_%d", i);
+            imshow(tmp, face_img);
+            waitKey(1);
+#endif
         }
     }
 }

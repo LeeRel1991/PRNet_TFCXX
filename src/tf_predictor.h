@@ -12,7 +12,7 @@ class FaceCropper{
 
 public:
     void crop(const cv::Mat src, cv::Rect& bbox, cv::Mat& dst);
-    void remapLandmarks(cv::Mat1f src, cv::Mat1f& dst, cv::Rect cropped_rect);
+    void remapLandmarks(cv::Mat1f& arr,  cv::Rect cropped_rect, cv::Rect old_rect);
 
 };
 
@@ -35,7 +35,7 @@ public:
      * @brief predict 人脸关键点检测
      * @param imgs input 批次图像，大图
      * @param rects input 批次boundingbox
-     * @param landmarks output 关键点，坐标相对于@em faces
+     * @param landmarks output 关键点，坐标相对于@em rects
      */
     void predict(const std::vector<cv::Mat> &imgs,
                  const std::vector<std::vector<cv::Rect> >& rects,
