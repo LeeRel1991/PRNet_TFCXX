@@ -91,4 +91,4 @@ std::vector<Mat> aligned_faces;
 
 ## TODO
 - [ ] tf->mxnet
-- [ ] batch
+- [x] batch

@@ -11,7 +11,8 @@ namespace prnet {
 class FaceCropper{
 
 public:
-    void crop(const cv::Mat src, cv::Rect bbox, cv::Mat& dst);
+    void crop(const cv::Mat src, cv::Rect& bbox, cv::Mat& dst);
+    void remapLandmarks(cv::Mat1f src, cv::Mat1f& dst, cv::Rect cropped_rect);
 
 };
 
@@ -20,9 +21,16 @@ class PRNet {
 public:
     PRNet();
     ~PRNet();
+    /**
+     * @brief init
+     * @param graph_file
+     * @param data_dirname
+     * @param gpu_id
+     * @return
+     */
     int init(const std::string& graph_file, const std::string& data_dirname, const int gpu_id);
     bool load(const std::string& graph_file);
-    bool predict(const cv::Mat& inp_img, cv::Mat_<float>& out_img);
+    void predict(const std::vector<cv::Mat>& imgs, std::vector<cv::Mat1f >& vertices3d);
 
     /**
      * @brief align

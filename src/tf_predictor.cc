@@ -19,13 +19,22 @@ using namespace tensorflow;
 using namespace cv;
 using namespace std;
 
+/* 执行网络forward前检查输入的尺寸，type，channel是否符合要求*/
+#define checkImgProp(img) \
+{\
+    CHECK( img.size() == m_inputGeometry ) << \
+        "input image size must be " << m_inputGeometry.width << " x " << m_inputGeometry.height ; \
+    CHECK( img.type() == CV_8UC3 ) << "input image type must be CV_8UC3"; \
+    CHECK( img.channels() == m_numChannels ) << "input image channel must be " << m_numChannels; \
+}
+
 namespace prnet {
 
 // Reads a model graph definition from disk, and creates a session object you
 // can use to run it.
 
 Status LoadGraph(const string& graph_file,
-                 std::unique_ptr<Session>* session,
+                 std::unique_ptr<Session>* sess,
                  const int gpu_id) {
 
     /**
@@ -51,10 +60,8 @@ Status LoadGraph(const string& graph_file,
     opts.config.set_allocated_gpu_options(gpuOpts);
     //opts.config.set_log_device_placement(true);
 
-    Session* tmp = NewSession(opts);
-
-    session->reset(tmp);
-    status = (*session)->Create(graph_def);
+    sess->reset(NewSession(opts));
+    status = (*sess)->Create(graph_def);
     if (!status.ok()) {
         return status;
     }
@@ -62,7 +69,7 @@ Status LoadGraph(const string& graph_file,
 }
 
 
-void FaceCropper::crop(const Mat src, Rect bbox, Mat &dst)
+void FaceCropper::crop(const Mat src, Rect& bbox, Mat &dst)
 {
 
     float old_size = (bbox.width + bbox.height)/2.0;
@@ -76,76 +83,101 @@ void FaceCropper::crop(const Mat src, Rect bbox, Mat &dst)
     int dst_x = max((int)(centor_x - dst_size/2.0), 0);
     int dst_y = max((int)(center_y - dst_size/2.0), 0);
 
-    Rect dst_bbox(dst_x, dst_y, dst_size, dst_size);
-    resize(src(dst_bbox), dst, Size(256,256));
+    bbox = Rect(dst_x, dst_y, dst_size, dst_size);
+    resize(src(bbox), dst, Size(256,256));
+
+}
+
+void FaceCropper::remapLandmarks(Mat1f src, Mat1f& dst, Rect cropped_rect)
+{
+
 
 }
 
 class PRNet::Impl {
 public:
+    Impl();
     int load(const std::string& graph_file, const int gpu_id);
-    bool predict(const cv::Mat& inp_img, cv::Mat_<float>& out_img);
+    void forwardNet(const vector<Mat>& imgs, vector<Mat_<float> >& vertices3d);
 
 private:
-    std::unique_ptr<tensorflow::Session> session;
-    std::string input_layer, output_layer;
+    std::unique_ptr<tensorflow::Session> m_sess;
+    std::string m_inputLayer, m_outputLayer;
+    Size m_inputGeometry;
+    int m_numChannels;
 };
+
+PRNet::Impl::Impl():
+    m_inputGeometry(256,256),
+    m_numChannels(3)
+{
+
+}
 
 int PRNet::Impl::load(const std::string& graph_file, const int gpu_id)
 {
     // First we load and initialize the model.
-    Status load_graph_status = LoadGraph(graph_file, &session, gpu_id );
+    Status load_graph_status = LoadGraph(graph_file, &m_sess, gpu_id );
     if (!load_graph_status.ok())
     {
         std::cerr << load_graph_status;
         return -1;
     }
 
-    input_layer = "Placeholder";
-    output_layer = "resfcn256/Reshape";
-//    output_layer = "resfcn256/Conv2d_transpose_16/Sigmoid";
+    m_inputLayer = "Placeholder";
+    m_outputLayer = "resfcn256/Reshape";
 
     return 0;
 }
 
-bool PRNet::Impl::predict(const cv::Mat& inp_img, cv::Mat_<float> & out_img)
+void PRNet::Impl::forwardNet(const vector<Mat>& imgs, vector<Mat_<float> >& vertices3d)
 {
-    // Copy from input image
-    Eigen::Index inp_w = static_cast<Eigen::Index>(inp_img.cols),
-            inp_h = static_cast<Eigen::Index>(inp_img.rows),
-            inp_ch = static_cast<Eigen::Index>(inp_img.channels());
+    // preprocess and Copy from input image
+    Tensor in_tensor(DT_FLOAT,
+                        {imgs.size(),
+                         m_inputGeometry.height,
+                         m_inputGeometry.width,
+                         m_numChannels});
 
-    // TODO: No copy
-    std::vector<Tensor> output_tensors;
-    Tensor input_tensor(DT_FLOAT, {1, inp_h, inp_w, inp_ch});
-    memcpy(input_tensor.flat<float>().data(),
-           inp_img.data,
-           inp_w * inp_h * inp_ch * sizeof(float) );
+    size_t data_len = m_inputGeometry.height * m_inputGeometry.width * m_numChannels ;
+    auto inp_data = in_tensor.flat<float>().data();
+    for (auto img:imgs) {
+#ifdef ENABLE_CHECK
+        checkImgProp(img);
+#endif
 
-    // Run
-    Status run_status = session->Run({{input_layer, input_tensor}},
-                                     {output_layer}, {}, &output_tensors);
-
-    if (!run_status.ok()) {
-        std::cerr << "Running model failed: " << run_status;
-        return false;
+        Mat img_float;
+        img.convertTo(img_float, CV_32FC3);
+        matNormalize(img_float, 255.f);
+        memcpy(inp_data, img_float.data,  data_len * sizeof(float) );
+        inp_data += data_len;
     }
 
-    // Copy to output image
-    const Tensor& output_tensor = output_tensors[0];
-    TTypes<float, 4>::ConstTensor tensor = output_tensor.tensor<float, 4>();
+    // Run
+    std::vector<Tensor> outputs;
+    Status status = m_sess->Run({{m_inputLayer, in_tensor}},
+                                     {m_outputLayer}, {}, &outputs);
 
-    assert(tensor.dimension(0) == 1);
-    assert(tensor.dimension(3) == 1); //batch x 65536x3x1
+    TF_CHECK_OK(status);
+
+    // Copy to output image
+    const Tensor& out_tensor = outputs[0];
+    TTypes<float, 4>::ConstTensor tensor = out_tensor.tensor<float, 4>();
+
+    CHECK_EQ(tensor.dimension(0), imgs.size()) << "output must have same batch with input";
+    CHECK_EQ(tensor.dimension(3), 1) << "outpur channel must be 1";
     size_t out_h = static_cast<size_t>(tensor.dimension(1)),
             out_w = static_cast<size_t>(tensor.dimension(2));
 
     //Warn: 输出65536x3点云矩阵
-    out_img.create(out_h, out_w);
-    memcpy(out_img.data, tensor.data(), out_h * out_w * sizeof(float));
+    size_t out_len = out_h * out_w;
+    for(int i =0; i<imgs.size(); ++i)
+    {
+        Mat_<float> tmp(out_h, out_w);
+        memcpy(tmp.data, tensor.data() + i * data_len, out_len * sizeof(float) );
+        vertices3d.push_back(tmp);
+    }
 
-
-    return true;
 }// PImpl pattern
 
 PRNet::PRNet():
@@ -166,8 +198,8 @@ int PRNet::init(const std::string& graph_file, const std::string& data_dirname, 
 }
 
 
-bool PRNet::predict(const cv::Mat& inp_img, cv::Mat_<float> & out_img) {
-    return impl->predict(inp_img, out_img);
+void PRNet::predict(const vector<Mat>& imgs, vector<cv::Mat1f >& vertices3d) {
+    impl->forwardNet(imgs, vertices3d);
 }
 
 
@@ -216,19 +248,26 @@ Mat_<float> PRNet::getAffineKpt(const Mat &pos_img, int kptNum)
 
 void PRNet::align(const Mat &img, const std::vector<Rect> &rects, std::vector<Mat> &alignedFaces)
 {
+    vector<Mat> imgs_batch;
+    vector<Mat_<float> > vertices3d_batch;
     for( auto rect:rects)
     {
-        Mat face_img, face_float;
+        Mat face_img;
         cropper.crop(img, rect, face_img);
-        face_img.convertTo(face_float, CV_32FC3);
-        matNormalize(face_float, 255.f);
+        imgs_batch.push_back(face_img);
+    }
 
+    {
+        SimpleTimer timer("impl->predict uv map");
+        impl->forwardNet(imgs_batch, vertices3d_batch);
+    }
+
+    for(int i=0; i< imgs_batch.size(); ++i)
+    {
+        Mat face_img = imgs_batch[i];
         Mat aligned_face;
-        Mat_<float> spareKpt, vertices3d;
-        {
-            SimpleTimer timer("impl->predict uv map");
-            impl->predict(face_float, vertices3d);
-        }
+        Mat_<float> spareKpt, vertices3d=vertices3d_batch[i];
+
         if(vertices3d.rows==0 || vertices3d.cols ==0)
         {
             aligned_face = face_img.clone();
@@ -239,16 +278,18 @@ void PRNet::align(const Mat &img, const std::vector<Rect> &rects, std::vector<Ma
             SimpleTimer timer("getAffineKpt");
             spareKpt = getAffineKpt(vertices3d, 5);
             aligned_face = aligner.align_by_kpt(face_img, spareKpt);
-
         }
         alignedFaces.push_back(aligned_face);
 
 #ifdef DRAW_IMG
         DrawKpt(face_img, spareKpt);
-        imshow("kpt", face_img);
+        char tmp[10];
+        sprintf(tmp, "kpt_%d", i);
+        imshow(tmp, face_img);
         waitKey(1);
 #endif
     }
+
 }
 
 

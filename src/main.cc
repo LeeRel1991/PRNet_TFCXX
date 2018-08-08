@@ -70,6 +70,7 @@ void getFaceBoungingbox(MxnetSSDClassifier *Classifier, const Mat& frame, std::v
               int w = (int)(bbox.w);
               int h = (int)(bbox.h);
               faces.push_back(cv::Rect(x, y, w , h));
+              cout << cv::Rect(x, y, w , h) << endl;
 
           }
 //      }
@@ -120,20 +121,25 @@ int main(int argc, char **argv)
         Mat img_rgb = Mat(frame.rows, frame.cols, CV_32FC3);
         PRNet::preprocess(frame, img_rgb);
 
-        std::vector<Rect> rects;
+
         std::vector<Mat> aligned_faces;
         //rects.push_back(Rect(0, 0, frame.cols, frame.rows));
-
+        vector<Rect> rects;
         getFaceBoungingbox(detector, frame, rects);
         if(rects.empty())
             continue;
 
+        vector<Mat> img_batch(1, img_rgb);
+        vector<vector<Rect> > rects_batch(1, rects);
+        vector<vector<Mat1f > > kpts_batch;
         {
             SimpleTimer timer("PRNet align total");
             tf_predictor.align(img_rgb, rects, aligned_faces);
+
         }
         for(auto img:aligned_faces)
             imshow("aligned", img);
+
         drawBoundingbox(frame, rects);
         imshow("frame", frame);
         waitKey(1);
