@@ -70,7 +70,7 @@ LIBS += -L/home/lirui/packages/tensorflow/bazel-bin/tensorflow
 using namespace cv;
 using namespace prnet;
 using namespace std;
-//must called in your main function
+//*****must called in your main function
 tensorflow::port::InitMain(argv[0], &argc, &argv);
 PRNet tf_predictor;
 if(0!=tf_predictor.init(pb_model, uv_files, 0))
@@ -80,12 +80,24 @@ if(0!=tf_predictor.init(pb_model, uv_files, 0))
 }
 Mat img_rgb = Mat(frame.rows, frame.cols, CV_32FC3);
 PRNet::preprocess(frame, img_rgb);
-std::vector<Rect> rects;
-std::vector<Mat> aligned_faces;
+vector<Mat> img_batch(1, img_rgb);
+vector<Rect> rects;
+/* detec face with your detector, and copy to rects*/
+
+vector<vector<Rect> > rects_batch(1, rects);
+vector<vector<Mat1f > > kpts_batch;
 {
     SimpleTimer timer("PRNet align total");
-    tf_predictor.align(img_rgb, rects, aligned_faces);
+    tf_predictor.predict(img_batch, rects_batch, kpts_batch);
 }
+
+for(auto kpt:kpts_batch[0]){
+    DrawKpt(frame, kpt);
+}
+
+drawBoundingbox(frame, rects);
+imshow("frame", frame);
+waitKey(1);
 ```
 
 

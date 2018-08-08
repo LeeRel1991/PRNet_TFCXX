@@ -202,6 +202,50 @@ void PRNet::predict(const vector<Mat>& imgs, vector<cv::Mat1f >& vertices3d) {
     impl->forwardNet(imgs, vertices3d);
 }
 
+void PRNet::predict(const std::vector<Mat> &imgs,
+                    const std::vector<std::vector<Rect> >& rects,
+                    std::vector<std::vector<Mat1f> >& landmarks)
+{
+    // 准备batch input
+    vector<Mat> imgs_batch;
+    std::vector<std::vector<Rect> > new_rects = rects;
+    auto it_img = imgs.cbegin(), it_img_end = imgs.cend();
+    auto it_rect = new_rects.begin();
+    for(; it_img!=it_img_end; ++it_img, ++it_rect){
+        for(auto it = it_rect->begin(); it!= it_rect->end(); ++it){
+            Mat face_img;
+            cropper.crop(*it_img, *it, face_img);
+            imgs_batch.push_back(face_img);
+        }
+    }
+
+    // forward
+    vector<Mat_<float> > vertices3d_batch;
+    {
+        SimpleTimer timer("impl->predict uv map");
+        impl->forwardNet(imgs_batch, vertices3d_batch);
+    }
+
+    // output remap to original boundingbox
+    landmarks.resize(imgs_batch.size());
+    auto it_kpt = vertices3d_batch.cbegin();
+    for(int i=0; i<imgs.size(); ++i){
+        int bbox_cnt = rects[i].size();
+
+        //landmarks[i].assign(it_kpt, it_kpt + bbox_cnt-1);
+        //it_kpt += bbox_cnt;
+        for(int j=0; j< bbox_cnt; ++j){
+            Rect r = new_rects[i][j];
+            Mat1f kpt = getAffineKpt(*it_kpt, 5);
+            for(int k=0; k<5; ++k){
+                kpt(k, 0) = kpt(k, 0)*r.width/256 + r.x;
+                kpt(k, 1) = kpt(k, 1)*r.height/256 + r.y;
+            }
+            landmarks[i].push_back(kpt);
+            it_kpt++;
+        }
+    }
+}
 
 void PRNet::preprocess(const Mat &img, Mat &img_float)
 {

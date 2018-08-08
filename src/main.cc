@@ -134,11 +134,14 @@ int main(int argc, char **argv)
         vector<vector<Mat1f > > kpts_batch;
         {
             SimpleTimer timer("PRNet align total");
-            tf_predictor.align(img_rgb, rects, aligned_faces);
-
+            //tf_predictor.align(img_rgb, rects, aligned_faces);
+            tf_predictor.predict(img_batch, rects_batch, kpts_batch);
         }
-        for(auto img:aligned_faces)
-            imshow("aligned", img);
+//        for(auto img:aligned_faces)
+//            imshow("aligned", img);
+        for(auto kpt:kpts_batch[0]){
+            DrawKpt(frame, kpt);
+        }
 
         drawBoundingbox(frame, rects);
         imshow("frame", frame);
