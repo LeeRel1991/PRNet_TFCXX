@@ -16,14 +16,22 @@
 ### install tensorflow
 ```sh
 
+# 安装bazal编译工具
+
+scp ubuntu@192.168.1.154:/home/ubuntu/Software/bazel-0.15.2-installer-linux-x86_64.sh ~/Downloads
+cd ~/Downloads 
+chmod +x bazel-0.15.2-installer-linux-x86_64.sh
+./bazel-0.15.2-installer-linux-x86_64.sh
+
+
+# 克隆tf源码
 git clone http://gitlab.bmi/VisionAI/soft/tensorflow.git tensorflow
-cd tensorflow
-git checkout v1.8.0
-# 注意cuda部分的选项参数需要手动输入
-./configure
-​​bazel build --config=cuda --config monolithic tensorflow/libtensorflow_cc.so
+cd tensorflow & git checkout v1.8.0
+./configure  # 此处会有一系列配置问答，注意cuda部分的选项参数需要手动输入，其他默认回车即可
+bazel build --config=cuda --config monolithic tensorflow/libtensorflow_cc.so
 
 # 手动install
+# 此处未测试，保守起见可参考pro，只需修改tf源码路径为本机即可
 sudo mkdir /usr/local/tensorflow
 sudo mkdir /usr/local/tensorflow/include
 sudo mkdir /usr/local/tensorflow/lib
@@ -83,24 +91,23 @@ PRNet::preprocess(frame, img_rgb);
 vector<Mat> img_batch(1, img_rgb);
 vector<Rect> rects;
 /* detec face with your detector, and copy to rects*/
-
 vector<vector<Rect> > rects_batch(1, rects);
 vector<vector<Mat1f > > kpts_batch;
 {
     SimpleTimer timer("PRNet align total");
     tf_predictor.predict(img_batch, rects_batch, kpts_batch);
 }
-
 int i=0;
 for(auto kpt:kpts_batch[0]){
     Mat roi = frame(rects[i++]);
     DrawKpt(roi, kpt);
 }
-
 drawBoundingbox(frame, rects);
 imshow("frame", frame);
 waitKey(1);
 ```
+
+
 
 
 ## TODO
