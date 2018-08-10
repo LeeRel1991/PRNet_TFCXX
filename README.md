@@ -64,18 +64,14 @@ INCLUDEPATH += /home/lirui/packages/tensorflow \
 /home/lirui/packages/tensorflow/bazel-tensorflow/external/nsync/public \
 /home/lirui/packages/tensorflow/bazel-tensorflow
 LIBS += -L/home/lirui/packages/tensorflow/bazel-bin/tensorflow
-
 LIBS += -ltensorflow_cc \
         -L/usr/local/lib -lprotobuf
-
 #opencv
 INCLUDEPATH += /usr/local/include
 LIBS += /usr/local/lib/libopencv_*.so
-
 # mobilenet-SSD-mxnet 人脸检测
 INCLUDEPATH += /home/lirui/packages/mxnet-1.1.0/include
 LIBS += -L/home/lirui/packages/mxnet-1.1.0/lib -lmxnet
-
 ```
 
 - run and commind line params
