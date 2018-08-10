@@ -27,6 +27,9 @@ chmod +x bazel-0.15.2-installer-linux-x86_64.sh
 # 克隆tf源码
 git clone http://gitlab.bmi/VisionAI/soft/tensorflow.git tensorflow
 cd tensorflow & git checkout v1.8.0
+
+# 拷贝cuda的libdevice.10.bc，否则编译安装tensorflow GPU版本时报错：Cannot find libdevice.10.bc under /usr/local/cuda-8.0
+sudo cp /usr/local/cuda-8.0/nvvm/libdevice/libdevice.compute_50.10.bc /usr/local/cuda-8.0/libdevice.10.bc
 ./configure  # 此处会有一系列配置问答，注意cuda部分的选项参数需要手动输入，其他默认回车即可
 bazel build --config=cuda --config monolithic tensorflow/libtensorflow_cc.so
 
