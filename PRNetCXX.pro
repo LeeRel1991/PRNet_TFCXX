@@ -27,13 +27,14 @@ HEADERS += \
     ./src/cxxopts.hpp \
     ./src/simple_timer.h \
     ./src/face_aligner.h \
-    src/utils.h
+    ./src/utils.h
 
 SOURCES += \
     ./src/tf_predictor.cc \
     ./src/main.cc \
     ./src/face-data.cc \
-    ./src/face_aligner.cpp
+    ./src/face_aligner.cpp \
+    ./src/utils.cpp
 
 CONFIG(debug, debug|release) {
     DESTDIR = $$PWD/build/debug
@@ -75,6 +76,10 @@ SOURCES += $$PWD/third_party/mobileSSD_MX/sample/mxnet_ssd_classifier.cpp
 
 INCLUDEPATH += /home/lirui/packages/mxnet-1.1.0/include
 LIBS += -L/home/lirui/packages/mxnet-1.1.0/lib -lmxnet
+
+#cuda
+INCLUDEPATH += /usr/local/cuda/include
+LIBS += -L/usr/local/cuda/lib64 -lcublas -lcudart
 
 # 其他非源码文件
 DISTFILES += \

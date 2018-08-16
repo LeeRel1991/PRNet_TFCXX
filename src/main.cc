@@ -110,7 +110,7 @@ int main(int argc, char **argv)
 
     // Predict
     PRNet tf_predictor;
-    if(0!=tf_predictor.init(pb_model, uv_files, 0))
+    if(0!=tf_predictor.init(pb_model, uv_files, 5, 0))
     {
         std::cout << "Initialized tf model fails" << std::endl;
         return -1;
@@ -127,8 +127,6 @@ int main(int argc, char **argv)
         Mat img_rgb = Mat(frame.rows, frame.cols, CV_32FC3);
         PRNet::preprocess(frame, img_rgb);
 
-
-        std::vector<Mat> aligned_faces;
         //rects.push_back(Rect(0, 0, frame.cols, frame.rows));
         vector<Rect> rects;
         getFaceBoungingbox(detector, frame, rects);
@@ -139,13 +137,17 @@ int main(int argc, char **argv)
         vector<vector<Rect> > rects_batch(1, rects);
         vector<vector<Mat1f > > kpts_batch;
         {
-            SimpleTimer timer("PRNet align total");
+            SimpleTimer timer("PRNet predict total");
             tf_predictor.predict(img_batch, rects_batch, kpts_batch);
         }
 
         int i=0;
         for(auto kpt:kpts_batch[0]){
             Mat roi = frame(rects[i++]);
+            // align demo
+            Mat aligned_face;
+            tf_predictor.align(roi, kpt, aligned_face);
+
             DrawKpt(roi, kpt);
         }
 

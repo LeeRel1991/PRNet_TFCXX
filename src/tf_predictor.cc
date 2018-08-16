@@ -1,5 +1,6 @@
 #include "tf_predictor.h"
 
+#include "tensorflow/core/common_runtime/gpu/gpu_managed_allocator.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/graph/default_device.h"
 #include "tensorflow/core/lib/core/errors.h"
@@ -15,6 +16,8 @@
 #include <fstream>
 #include "simple_timer.h"
 #include "utils.h"
+#include <cuda_runtime.h>
+
 using namespace tensorflow;
 using namespace cv;
 using namespace std;
@@ -58,7 +61,7 @@ Status LoadGraph(const string& graph_file,
     gpuOpts->set_per_process_gpu_memory_fraction(0.3);
     gpuOpts->set_allow_growth(true);
     opts.config.set_allocated_gpu_options(gpuOpts);
-    //opts.config.set_log_device_placement(true);
+    opts.config.set_log_device_placement(true);
 
     sess->reset(NewSession(opts));
     status = (*sess)->Create(graph_def);
@@ -69,7 +72,7 @@ Status LoadGraph(const string& graph_file,
 }
 
 
-void FaceCropper::crop(const Mat src, Rect& bbox, Mat &dst)
+void FaceCropper::crop(const cuda::GpuMat src, Rect& bbox, cuda::GpuMat &dst)
 {
 
     float old_size = (bbox.width + bbox.height)/2.0;
@@ -84,7 +87,7 @@ void FaceCropper::crop(const Mat src, Rect& bbox, Mat &dst)
     int dst_y = max((int)(center_y - dst_size/2.0), 0);
 
     bbox = Rect(dst_x, dst_y, dst_size, dst_size);
-    resize(src(bbox), dst, Size(256,256));
+    cv::cuda::resize(src(bbox), dst, Size(256,256));
 
 }
 
@@ -103,8 +106,9 @@ class PRNet::Impl {
 public:
     Impl();
     int load(const std::string& graph_file, const int gpu_id);
-    void forwardNet(const vector<Mat>& imgs, vector<Mat_<float> >& vertices3d);
-
+    void forwardNet(const vector<cuda::GpuMat>& imgs, vector<Mat_<float> >& vertices3d);
+    template<typename T> inline
+    void preprocess(const T& img, T& img_float);
 private:
     std::unique_ptr<tensorflow::Session> m_sess;
     std::string m_inputLayer, m_outputLayer;
@@ -135,10 +139,19 @@ int PRNet::Impl::load(const std::string& graph_file, const int gpu_id)
     return 0;
 }
 
-void PRNet::Impl::forwardNet(const vector<Mat>& imgs, vector<Mat_<float> >& vertices3d)
+template<typename T> inline
+void PRNet::Impl::preprocess(const T& img, T& img_float){
+    img.convertTo(img_float, CV_32F);
+    matNormalize(img_float, 255.f);
+
+}
+
+void PRNet::Impl::forwardNet(const vector<cuda::GpuMat>& imgs, vector<Mat_<float> >& vertices3d)
 {
-    // preprocess and Copy from input image
-    Tensor in_tensor(DT_FLOAT,
+    // Copy from input image
+
+    GpuManagedAllocator gpuAl;
+    Tensor in_tensor(&gpuAl,DT_FLOAT,
                         {imgs.size(),
                          m_inputGeometry.height,
                          m_inputGeometry.width,
@@ -146,15 +159,17 @@ void PRNet::Impl::forwardNet(const vector<Mat>& imgs, vector<Mat_<float> >& vert
 
     size_t data_len = m_inputGeometry.height * m_inputGeometry.width * m_numChannels ;
     auto inp_data = in_tensor.flat<float>().data();
+    size_t dpitch = m_inputGeometry.width * m_numChannels * sizeof(float);
+
+
     for (auto img:imgs) {
 #ifdef ENABLE_CHECK
-        checkImgProp(img);
+//        checkImgProp(img);
 #endif
-
-        Mat img_float;
-        img.convertTo(img_float, CV_32FC3);
-        matNormalize(img_float, 255.f);
-        memcpy(inp_data, img_float.data,  data_len * sizeof(float) );
+        cuda::GpuMat img_float;
+        preprocess<cuda::GpuMat>(img, img_float);
+        cudaMemcpy2D(inp_data, dpitch,
+                     img_float.data, img_float.step, dpitch, m_inputGeometry.height, cudaMemcpyHostToDevice);
         inp_data += data_len;
     }
 
@@ -193,33 +208,59 @@ PRNet::PRNet():
 
 PRNet::~PRNet() {}
 
-int PRNet::init(const std::string& graph_file, const std::string& data_dirname, const int gpu_id)
+int PRNet::init(const std::string& graph_file,
+                const std::string& data_dirname,
+                const int lmk_num,
+                const int gpu_id)
 {
     if (!LoadFaceData(data_dirname, &face_data)) {
         return -1;
     }
 
+    m_lmkNum = lmk_num;
     return impl->load(graph_file, gpu_id);
 }
 
 
 void PRNet::predict(const vector<Mat>& imgs, vector<cv::Mat1f >& vertices3d) {
-    impl->forwardNet(imgs, vertices3d);
+    vector<cuda::GpuMat> imgsGpu_batch;
+    for(auto img: imgs){
+        cuda::GpuMat tmp;
+        tmp.upload(img);
+        imgsGpu_batch.push_back(tmp);
+    }
+
+    impl->forwardNet(imgsGpu_batch, vertices3d);
 }
 
 void PRNet::predict(const std::vector<Mat> &imgs,
                     const std::vector<std::vector<Rect> >& rects,
                     std::vector<std::vector<Mat1f> >& landmarks)
 {
+    //tranform to GpuMat
+    vector<cuda::GpuMat> imgsGpu;
+    for(auto img:imgs){
+        cuda::GpuMat tmp;
+        tmp.upload(img);
+        imgsGpu.push_back(tmp);
+    }
+
+    predict(imgsGpu, rects, landmarks);
+}
+
+void PRNet::predict(const std::vector<cuda::GpuMat> &imgs,
+                    const std::vector<std::vector<Rect> >& rects,
+                    std::vector<std::vector<Mat1f> >& landmarks)
+{
     // 准备batch input
-    vector<Mat> imgs_batch;
+    vector<cuda::GpuMat> imgs_batch;
     std::vector<std::vector<Rect> > new_rects = rects;
     auto it_img = imgs.cbegin(), it_img_end = imgs.cend();
     auto it_rect = new_rects.begin();
     for(; it_img!=it_img_end; ++it_img, ++it_rect){
         for(auto it = it_rect->begin(); it!= it_rect->end(); ++it){
-            Mat face_img;
-            cropper.crop(*it_img, *it, face_img);
+            cuda::GpuMat face_img;
+            cropper.crop(*it_img, *it, face_img);            
             imgs_batch.push_back(face_img);
         }
     }
@@ -239,14 +280,15 @@ void PRNet::predict(const std::vector<Mat> &imgs,
         int bbox_cnt = rects[i].size();
 
         for(int j=0; j< bbox_cnt; ++j){
-            Mat1f kpt = getAffineKpt(*it_kpt, 5);
+            Mat1f kpt = getAffineKpt(*it_kpt);
             cropper.remapLandmarks(kpt, new_rects[i][j], rects[i][j]);
 
             landmarks[i].push_back(kpt);
             it_kpt++;
 
 #ifdef DRAW_IMG
-            Mat face_img = imgs[i](rects[i][j]);
+            Mat face_img;
+            imgs[i](rects[i][j]).download(face_img);
             DrawKpt(face_img, kpt);
             char tmp[10];
             sprintf(tmp, "kpt_%d", i);
@@ -257,12 +299,13 @@ void PRNet::predict(const std::vector<Mat> &imgs,
     }
 }
 
-void PRNet::preprocess(const Mat &img, Mat &img_float)
+void PRNet::preprocess(const Mat &img, Mat &img_rgb)
 {
-    cvtColor(img, img_float, COLOR_BGR2RGB);
+    cvtColor(img, img_rgb, COLOR_BGR2RGB);
 }
 
-Mat_<float> PRNet::getAffineKpt(const Mat &pos_img, int kptNum)
+
+Mat_<float> PRNet::getAffineKpt(const Mat &pos_img)
 {
     // Note 0.006ms total
     //SimpleTimer timer("getAffineKpt00");
@@ -278,9 +321,9 @@ Mat_<float> PRNet::getAffineKpt(const Mat &pos_img, int kptNum)
     }
 
 
-    Mat_<float> sparseKpt(kptNum, 2);
+    Mat_<float> sparseKpt(m_lmkNum, 2);
     int data_len = 2*sizeof(float);
-    switch (kptNum) {
+    switch (m_lmkNum) {
     case 5:
         memcpy((float*)sparseKpt.data + 2 * 2, (float*)kpt68.data + 30*2, data_len);
         memcpy((float*)sparseKpt.data + 3 * 2, (float*)kpt68.data + 48*2, data_len);
@@ -300,49 +343,17 @@ Mat_<float> PRNet::getAffineKpt(const Mat &pos_img, int kptNum)
     return sparseKpt;
 }
 
-void PRNet::align(const Mat &img, const std::vector<Rect> &rects, std::vector<Mat> &alignedFaces)
+void PRNet::align(const cv::Mat& img, const cv::Mat1f predLmk, cv::Mat & alignedFace)
 {
-    vector<Mat> imgs_batch;
-    vector<Mat_<float> > vertices3d_batch;
-    for( auto rect:rects)
-    {
-        Mat face_img;
-        cropper.crop(img, rect, face_img);
-        imgs_batch.push_back(face_img);
-    }
-
-    {
-        SimpleTimer timer("impl->predict uv map");
-        impl->forwardNet(imgs_batch, vertices3d_batch);
-    }
-
-    for(int i=0; i< imgs_batch.size(); ++i)
-    {
-        Mat face_img = imgs_batch[i];
-        Mat aligned_face;
-        Mat_<float> spareKpt, vertices3d=vertices3d_batch[i];
-
-        if(vertices3d.rows==0 || vertices3d.cols ==0)
-        {
-            aligned_face = face_img.clone();
-            continue;
-        }
-        // get five key points  矫正
-        {
-            SimpleTimer timer("getAffineKpt");
-            spareKpt = getAffineKpt(vertices3d, 5);
-            aligned_face = aligner.align_by_kpt(face_img, spareKpt);
-        }
-        alignedFaces.push_back(aligned_face);
+    //  矫正
+    SimpleTimer timer("align face");
+    alignedFace = aligner.align_by_kpt(img, predLmk);
 
 #ifdef DRAW_IMG
-        DrawKpt(face_img, spareKpt);
-        char tmp[10];
-        sprintf(tmp, "kpt_%d", i);
-        imshow(tmp, face_img);
-        waitKey(1);
+    imshow("before", img);
+    imshow("after align", alignedFace);
+    waitKey(1);
 #endif
-    }
 
 }
 

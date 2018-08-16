@@ -100,6 +100,7 @@ if(0!=tf_predictor.init(pb_model, uv_files, 0))
 }
 Mat img_rgb = Mat(frame.rows, frame.cols, CV_32FC3);
 PRNet::preprocess(frame, img_rgb);
+//***** vector<cuda::GpuMat> img_batch(1, img_rgb); for gpu interface
 vector<Mat> img_batch(1, img_rgb);
 vector<Rect> rects;
 /* detec face with your detector, and copy to rects*/
